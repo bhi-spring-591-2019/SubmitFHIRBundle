@@ -1,0 +1,7 @@
+{
+  "profiles": {
+    "SubmitFHIRBundle": {
+      "commandName": "Project"
+    }
+  }
+}
