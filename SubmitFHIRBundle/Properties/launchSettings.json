@@ -1,7 +1,8 @@
 {
   "profiles": {
     "SubmitFHIRBundle": {
-      "commandName": "Project"
+      "commandName": "Project",
+      "commandLineArgs": "-d \"C:\\repos\\synthea\\output\\fhir_stu3\" -s https://fhir591.azurewebsites.net"
     }
   }
 }

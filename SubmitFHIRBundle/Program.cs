@@ -123,6 +123,16 @@ namespace SubmitFHIRBundle
                 return -1;
             }
 
+            try
+            {
+                ReferenceConverter.ConvertUUIDs(bundle);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Failed to resolve references in doc: " + ex.Message);
+                return -1;
+            }
+
             var uploadTasks = new List<System.Threading.Tasks.Task<Resource>>();
             semaphore = new SemaphoreSlim(10, 10);
 
@@ -154,7 +164,7 @@ namespace SubmitFHIRBundle
             await semaphore.WaitAsync();
             try
             {
-                return await client.CreateAsync(resource);
+                return await client.UpdateAsync(resource);
             }
             catch (FhirOperationException fhirEx)
             {
