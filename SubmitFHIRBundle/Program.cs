@@ -7,6 +7,7 @@ using Newtonsoft.Json;
 using Hl7.Fhir.Rest;
 using System.Collections.Generic;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace SubmitFHIRBundle
 {
@@ -31,8 +32,14 @@ namespace SubmitFHIRBundle
             var serverURL = app.Option("-s|--FHIRServerURL",
                                         "FHIR Server url",
                                         CommandOptionType.SingleValue);
+            var bearerToken = app.Option("-t|--token",
+                                         "Authorization bearer token",
+                                         CommandOptionType.SingleValue);
+            var separateBundle = app.Option("-b|--separateBundle",
+                                            "Flag which indicates that the tool should separate the bundle into individual resources to submit to server.",
+                                            CommandOptionType.NoValue);
 
-            app.OnExecute(() =>
+             app.OnExecute(() =>
             {
                 if (!bundlePath.HasValue() && !bundleDir.HasValue())
                 {
@@ -69,25 +76,33 @@ namespace SubmitFHIRBundle
                     return 0;
                 }
 
+                semaphore = new SemaphoreSlim(10, 10);ure
+
                 if (bundleDir.HasValue())
                 {
-                    int returnValue = 0;
+                    var tasks = new List<System.Threading.Tasks.Task>();
                     var bundlePaths = Directory.EnumerateFiles(bundleDir.Value(), "*.json");
                     foreach (var path in bundlePaths)
                     {
-                        returnValue = UploadBundle(path, serverURL.Value());
+                        tasks.Add(UploadBundle(path, serverURL.Value(), bearerToken.Value(), separateBundle.HasValue()));
                     }
-                    return returnValue;
+
+                    System.Threading.Tasks.Task.WhenAll(tasks).Wait();
+                    return 0;
                 }
                 else
-                    return UploadBundle(bundlePath.Value(), serverURL.Value());
+                {
+                    UploadBundle(bundlePath.Value(), serverURL.Value(), bearerToken.Value(), separateBundle.HasValue()).Wait();
+                    return 0;
+                }
+                
 
             });
 
             app.Execute(args);
         }
 
-        private static int UploadBundle(string bundlePath, string serverURL)
+        private static async Task<int> UploadBundle(string bundlePath, string serverURL, string bearerToken = null, bool separateBundle = false)
         {
             Bundle bundle;
             try
@@ -105,9 +120,9 @@ namespace SubmitFHIRBundle
                 return -1;
             }
 
-            if (bundle.Type !=  Bundle.BundleType.Transaction && bundle.Type != Bundle.BundleType.Batch)
+            if (bundle.Type !=  Bundle.BundleType.Transaction && bundle.Type != Bundle.BundleType.Batch && bundle.Type != Bundle.BundleType.Collection)
             {
-                System.Console.WriteLine($"This tool is designed to handle Batch or Transaction type Bundles. The supplied Bundle is of type {bundle.Type.ToString()} and connot be processed.");
+                System.Console.WriteLine($"This tool is designed to handle Batch, Collection or Transaction type Bundles. The supplied Bundle is of type {bundle.Type.ToString()} and connot be processed.");
                 return 0;
             }
 
@@ -116,6 +131,16 @@ namespace SubmitFHIRBundle
             try
             {
                 client = new FhirClient(serverURL);
+                client.PreferredFormat = ResourceFormat.Json;
+
+                if (bearerToken != null)
+                {
+                    client.OnBeforeRequest += (object sender, BeforeRequestEventArgs e) =>
+                    {
+                        // Replace with a valid bearer token for this server
+                        e.RawRequest.Headers.Add("Authorization", "Bearer " + bearerToken);
+                    };
+                }
             }
             catch(Exception ex)
             {
@@ -123,28 +148,35 @@ namespace SubmitFHIRBundle
                 return -1;
             }
 
-            try
-            {
-                ReferenceConverter.ConvertUUIDs(bundle);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("Failed to resolve references in doc: " + ex.Message);
-                return -1;
-            }
-
             var uploadTasks = new List<System.Threading.Tasks.Task<Resource>>();
-            semaphore = new SemaphoreSlim(10, 10);
 
-            foreach (var entry in bundle.Entry)
+            if (separateBundle)
             {
-                Console.WriteLine("Starting upload: " + entry.Request.Method + entry.Resource.TypeName);
-                uploadTasks.Add(UploadResourceAsync(entry.Resource, client));
+                try
+                {
+                    ReferenceConverter.ConvertUUIDs(bundle);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("Failed to resolve references in doc: " + ex.Message);
+                    return -1;
+                }
+
+                foreach (var entry in bundle.Entry)
+                {
+                    Console.WriteLine("Starting upload: " + entry.Request.Method + ":" + entry.Resource.TypeName);
+                    uploadTasks.Add(UploadResourceAsync(entry.Resource, client));
+                }
+            }
+            else
+            {
+                Console.WriteLine("Starting bundle upload, bundle type:" + bundle.Type.ToString());
+                uploadTasks.Add(UploadResourceAsync(bundle, client));
             }
             
             while (uploadTasks.Count > 0)
             {
-                var uploadTask = System.Threading.Tasks.Task.WhenAny<Resource>(uploadTasks).Result;
+                var uploadTask = await System.Threading.Tasks.Task.WhenAny<Resource>(uploadTasks);
                 uploadTasks.Remove(uploadTask);
                 if (uploadTask.Exception != null)
                 {
@@ -152,7 +184,8 @@ namespace SubmitFHIRBundle
                 }
                 if (uploadTask.IsCompletedSuccessfully)
                 {
-                    Console.WriteLine($"Finished uploading: {uploadTask.Result.TypeName}");
+                    if (uploadTask.Result != null && uploadTask.Result.TypeName != null)
+                        Console.WriteLine($"Finished uploading: {uploadTask.Result.TypeName}");
                 }
             }
 
@@ -164,14 +197,18 @@ namespace SubmitFHIRBundle
             await semaphore.WaitAsync();
             try
             {
-                return await client.UpdateAsync(resource);
+                if (resource is Bundle bundle)
+                    return await client.TransactionAsync(bundle);
+                else
+                    return await client.UpdateAsync(resource);
             }
             catch (FhirOperationException fhirEx)
             {
                 if (fhirEx.Status == System.Net.HttpStatusCode.TooManyRequests && retry == true)
                 {
                     // Take a break and try again
-                    Thread.Sleep(3000);
+                    Console.WriteLine($"Adding a 300ms delay: {fhirEx.Message}");
+                    Thread.Sleep(300);
                     return await UploadResourceAsync(resource, client, false);
                 }
                 else
