@@ -76,7 +76,29 @@ namespace SubmitFHIRBundle
                     return 0;
                 }
 
-                semaphore = new SemaphoreSlim(10, 10);ure
+                semaphore = new SemaphoreSlim(1, 3);
+
+                FhirClient client;
+
+                try
+                {
+                    client = new FhirClient(serverURL.Value());
+                    client.PreferredFormat = ResourceFormat.Json;
+
+                    if (bearerToken != null)
+                    {
+                        client.OnBeforeRequest += (object sender, BeforeRequestEventArgs e) =>
+                        {
+                            // Replace with a valid bearer token for this server
+                            e.RawRequest.Headers.Add("Authorization", "Bearer " + bearerToken);
+                        };
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Console.WriteLine($"Unable to create FHIR client for server {serverURL}. Error: {ex.Message}");
+                    return -1;
+                }
 
                 if (bundleDir.HasValue())
                 {
@@ -84,7 +106,7 @@ namespace SubmitFHIRBundle
                     var bundlePaths = Directory.EnumerateFiles(bundleDir.Value(), "*.json");
                     foreach (var path in bundlePaths)
                     {
-                        tasks.Add(UploadBundle(path, serverURL.Value(), bearerToken.Value(), separateBundle.HasValue()));
+                        tasks.Add(UploadBundle(path, client, bearerToken.Value(), separateBundle.HasValue()));
                     }
 
                     System.Threading.Tasks.Task.WhenAll(tasks).Wait();
@@ -92,7 +114,7 @@ namespace SubmitFHIRBundle
                 }
                 else
                 {
-                    UploadBundle(bundlePath.Value(), serverURL.Value(), bearerToken.Value(), separateBundle.HasValue()).Wait();
+                    UploadBundle(bundlePath.Value(), client, bearerToken.Value(), separateBundle.HasValue()).Wait();
                     return 0;
                 }
                 
@@ -102,7 +124,7 @@ namespace SubmitFHIRBundle
             app.Execute(args);
         }
 
-        private static async Task<int> UploadBundle(string bundlePath, string serverURL, string bearerToken = null, bool separateBundle = false)
+        private static async Task<int> UploadBundle(string bundlePath, FhirClient client, string bearerToken = null, bool separateBundle = false)
         {
             Bundle bundle;
             try
@@ -124,28 +146,6 @@ namespace SubmitFHIRBundle
             {
                 System.Console.WriteLine($"This tool is designed to handle Batch, Collection or Transaction type Bundles. The supplied Bundle is of type {bundle.Type.ToString()} and connot be processed.");
                 return 0;
-            }
-
-            FhirClient client;
-
-            try
-            {
-                client = new FhirClient(serverURL);
-                client.PreferredFormat = ResourceFormat.Json;
-
-                if (bearerToken != null)
-                {
-                    client.OnBeforeRequest += (object sender, BeforeRequestEventArgs e) =>
-                    {
-                        // Replace with a valid bearer token for this server
-                        e.RawRequest.Headers.Add("Authorization", "Bearer " + bearerToken);
-                    };
-                }
-            }
-            catch(Exception ex)
-            {
-                System.Console.WriteLine($"Unable to create FHIR client for server {serverURL}. Error: {ex.Message}");
-                return -1;
             }
 
             var uploadTasks = new List<System.Threading.Tasks.Task<Resource>>();
