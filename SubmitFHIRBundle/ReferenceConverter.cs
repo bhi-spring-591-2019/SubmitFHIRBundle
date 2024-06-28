@@ -55,7 +55,8 @@ namespace SubmitFHIRBundle
             {
                 foreach (var entry in bundle.Entry)
                 {
-                    table.Add(entry.FullUrl, new IdTypePair { ResourceType = entry.Resource.ResourceType, Id = entry.Resource.Id });
+                   entry.Resource.TryDeriveResourceType(out var resourceType);
+                   table.Add(entry.FullUrl, new IdTypePair { ResourceType = resourceType, Id = entry.Resource.Id });
                 }
             }
             catch

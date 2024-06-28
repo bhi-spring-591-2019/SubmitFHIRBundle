@@ -8,6 +8,7 @@ using Hl7.Fhir.Rest;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Net.Http.Headers;
 
 namespace SubmitFHIRBundle
 {
@@ -82,17 +83,18 @@ namespace SubmitFHIRBundle
 
                 try
                 {
-                    client = new FhirClient(serverURL.Value());
-                    client.PreferredFormat = ResourceFormat.Json;
-
                     if (bearerToken != null)
                     {
-                        client.OnBeforeRequest += (object sender, BeforeRequestEventArgs e) =>
-                        {
-                            // Replace with a valid bearer token for this server
-                            e.RawRequest.Headers.Add("Authorization", "Bearer " + bearerToken);
-                        };
+                        var handler = new AuthorizationMessageHandler();
+                        handler.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken.Value());
+                        client = new FhirClient(serverURL.Value(), null, handler);
                     }
+                    else
+                    {
+                        client = new FhirClient(serverURL.Value());
+                    }
+
+                    client.Settings.PreferredFormat = ResourceFormat.Json;
                 }
                 catch (Exception ex)
                 {
